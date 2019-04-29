@@ -5,16 +5,18 @@ import numpy as np
 import tensorflow as tf
 from stream import ThreadedCam
 from trackedobjects import TrackableObject
+from sort import Sort
+from time import time
+from numba import jit
+from utils import roiselector
 
 
 det = ObjectDetector('cardetector')
 ct = CentroidTracker()
 trackers = []
 totalframes = 0
-skipframes = 10
+skipframes = 5
 trackedobjects = {}
-roicoords = []
-takepoints = True
 roiwindow = 'Pls Select ROI'
 
 H = None
@@ -24,42 +26,28 @@ def check_and_correct_boundaries(x,y,xmin,ymin,xmax,ymax):
     if x < xmin:
         x = xmin
     elif x > xmax:
-        x = xmax
+        x = xmax-1
     if y < ymin:
         y = ymin
     elif y > ymax:
-        y = ymax
+        y = ymax-1
     return x,y    
 
+@jit
 def countinroi(image,vertices):
     mask = np.zeros_like(image)
     cv2.fillPoly(mask,vertices,1)
     masked = cv2.bitwise_and(image,mask)
     return np.sum(masked)
 
-def get_coords_from_clicks(event,x,y,flags,param):
-    global roicoords, takepoints
-    if event == cv2.EVENT_LBUTTONUP:
-        roicoords.append((x,y))
-    elif event == cv2.EVENT_LBUTTONDBLCLK:
-        roicoords.append((x,y))
-        takepoints = False
-
 cap = cv2.VideoCapture('./samples/traffic.mp4')
 
 
 ret,frame = cap.read()
 H, W = frame.shape[:2]
-cv2.namedWindow(roiwindow)
-cv2.setMouseCallback(roiwindow,get_coords_from_clicks)
-while takepoints:
-    cv2.imshow(roiwindow,frame)
-    key = cv2.waitKey(1) & 0xFF
-cv2.destroyAllWindows()
-
+roicoords = roiselector.ROISelector(frame)()
 roicoords = np.array([roicoords],dtype=np.int32)
 print(roicoords)
-
 with tf.Session(graph = det.graph) as sess:
     while 10:
         status = 'WAITING'
@@ -70,21 +58,33 @@ with tf.Session(graph = det.graph) as sess:
         if totalframes % skipframes == 0:
             status = 'DETECTING'
             trackers = []
-            cents,boxes = det.detect_centroids(frame,sess)
+            lasttime = time()
+            cents,boxes,_ = det.detect_centroids(frame,sess)
+            spent = time() - lasttime
+            print("Spent {} second(s) on detection".format(spent))
+            lasttime = time()
             for box in boxes:
                 tracker = cv2.TrackerKCF_create()
                 tracker.init(frame,tuple(box))
                 trackers.append(tracker)
+            spent = time() - lasttime
+            print("Spent {} second(s) on registering trackers".format(spent))
         else:
             status = 'TRACKING'
-            for tracker in trackers:
+            lasttime = time()
+            centroids = [[] for _ in range(len(trackers))]
+            for i,tracker in enumerate(trackers):
                 success, box = tracker.update(frame)
                 cent = [box[0]+box[2]/2,box[1]+box[3]/2]
-                centroids.append(cent)
-        print(status)
-        print(centroids)
+                centroids[i] = cent
+            spent = time() - lasttime
+            print("Spent {} second(s) on updating trackers".format(spent))
+        lasttime = time()
         objects = ct.update(np.array(centroids,dtype=np.int32))
+        spent = time() - lasttime
+        print("Spent {} second(s) on updating cent trackers".format(spent))
         cv2.polylines(frame,roicoords,isClosed=False,color=[255,0,0],thickness=2)
+        lasttime = time()
         for objid,centroid in objects.items():
             x,y = centroid
             x,y = check_and_correct_boundaries(x,y,0,0,W,H)
@@ -99,8 +99,13 @@ with tf.Session(graph = det.graph) as sess:
             cv2.putText(frame, text, (centroid[0] - 10, centroid[1] - 10),
                 cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 255, 0), 2)
             cv2.circle(frame, (centroid[0], centroid[1]), 4, (0, 255, 0), -1)
+        spent = time() - lasttime
+        print("Spent {} second(s) on drawing and updating tracked objects".format(spent))
         frame = cv2.cvtColor(frame,cv2.COLOR_RGB2BGR)
+        lasttime = time()
         count = countinroi(locations,roicoords)
+        spent = time() - lasttime
+        print("Spent {} second(s) on roi counting".format(spent))
         count_text = "Count : {}".format(count)
         cv2.putText(frame, status, (10, 20),cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 0, 255), 2)
         cv2.putText(frame, count_text, (10, 40),cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 0, 255), 2)

@@ -62,9 +62,11 @@ class ObjectDetector(object):
     def get_centroids_bboxes_from_dict(self,detection_dict,height,width,threshold=0.5):
         boxes = detection_dict['detection_boxes']
         scores = detection_dict['detection_scores']
-        boxes = boxes[np.where(scores > threshold)]
+        thresindices = np.where(scores > threshold)
+        boxes = boxes[thresindices]
+        scores = scores[thresindices]
         centroids = [((b[2] + b[0])*height/2,(b[3]+b[1])*width/2) for b in boxes]
-        return centroids, boxes
+        return centroids, boxes, scores
     
     def translate_boxes_to_xywh(self,boxes,height,width):
         results = [[] for _ in range(len(boxes))]
@@ -80,9 +82,24 @@ class ObjectDetector(object):
     def detect_centroids(self,image,session,threshold=0.5):
         height,width = image.shape[:2]
         detection_dict,_ = self.get_detection_dict(image,session)
-        centroids, boxes = self.get_centroids_bboxes_from_dict(detection_dict,height,width,threshold=threshold)
-        boxes = self.translate_boxes_to_xywh(boxes,height,width) 
-        return np.array(centroids,dtype=np.int32), np.array(boxes,dtype=np.int32)
+        centroids, boxes, scores = self.get_centroids_bboxes_from_dict(detection_dict,height,width,threshold=threshold)
+        if len(boxes) != 0:
+            boxes = self.translate_boxes_to_xywh(boxes,height,width) 
+        return np.array(centroids,dtype=np.int32), np.array(boxes,dtype=np.int32), np.array(scores,dtype=np.float32)
+    
+    def detect_boxes_and_scores(self,image,session,threshold=0.5,sort=False):
+        if sort:
+            _, boxes, scores = self.detect_centroids(image,session,threshold)
+            if len(boxes) != 0:    
+                boxes[:,2:4] += boxes[:,0:2]
+                boxes = boxes.astype(np.float32)
+                scores = scores.reshape(-1,1)
+                boxes_cpy = np.hstack((boxes,scores))
+                return boxes_cpy
+            else:
+                return np.array([])
+        else:
+            raise NotImplementedError('Please implement this first.')
 
     def initialize_graph(self):
         model_path = os.path.join(self.model_name,'frozen_inference_graph.pb')

@@ -16,6 +16,7 @@ class ThreadedCam(object):
     
     def stop(self):
         self.stopped = True
+        self.cap.release()
     
     def get_frame(self):
         return self.frame
@@ -23,7 +24,6 @@ class ThreadedCam(object):
     def _get_frame(self):
         while 2:
             if self.stopped:
-                self.cap.release()
                 break
             self.ok, self.frame = self.cap.read()
             if self.fps > 0:
